@@ -15,7 +15,7 @@ pipeline {
     agent any
     environment {
         TERRAFORM_VERSION = '1.9.3'
-        TERRAFORM_BIN = '/usr/local/bin/terraform'
+        TERRAFORM_DIR = "${env.WORKSPACE}/terraform-bin"
     }
     stages {
 
@@ -34,10 +34,12 @@ pipeline {
         stage('Install Terraform') {
             steps {
                 sh '''
-                    echo "Installing Terraform ${TERRAFORM_VERSION}..."
-                    curl -LO https://releases.hashicorp.com/terraform/${TERRAFORM_VERSION}/terraform_${TERRAFORM_VERSION}_linux_amd64.zip
-                    unzip -o terraform_${TERRAFORM_VERSION}_linux_amd64.zip
-                    sudo mv terraform ${TERRAFORM_BIN}
+                    echo "Installing Terraform ${TERRAFORM_VERSION} locally..."
+                    mkdir -p ${TERRAFORM_DIR}
+                    curl -Lo ${TERRAFORM_DIR}/terraform.zip https://releases.hashicorp.com/terraform/${TERRAFORM_VERSION}/terraform_${TERRAFORM_VERSION}_linux_amd64.zip
+                    unzip -o ${TERRAFORM_DIR}/terraform.zip -d ${TERRAFORM_DIR}
+                    chmod +x ${TERRAFORM_DIR}/terraform
+                    export PATH=${TERRAFORM_DIR}:$PATH
                     terraform version
                 '''
             }
@@ -46,7 +48,10 @@ pipeline {
         stage('Init') {
             steps {
                 withAWS(credentials: 'aws-creds', region: 'us-east-1') {
-                    sh 'terraform -chdir=eks/ init'
+                    sh '''
+                        export PATH=${TERRAFORM_DIR}:$PATH
+                        terraform -chdir=eks/ init
+                    '''
                 }
             }
         }
@@ -54,7 +59,10 @@ pipeline {
         stage('Validate') {
             steps {
                 withAWS(credentials: 'aws-creds', region: 'us-east-1') {
-                    sh 'terraform -chdir=eks/ validate'
+                    sh '''
+                        export PATH=${TERRAFORM_DIR}:$PATH
+                        terraform -chdir=eks/ validate
+                    '''
                 }
             }
         }
@@ -63,19 +71,17 @@ pipeline {
             steps {
                 withAWS(credentials: 'aws-creds', region: 'us-east-1') {
                     script {
-                        if (params.Terraform_Action == 'plan') {
-                            sh "terraform -chdir=eks/ plan -var-file=${params.Environment}.tfvars"
-                        } else if (params.Terraform_Action == 'apply') {
-                            sh "terraform -chdir=eks/ apply -var-file=${params.Environment}.tfvars -auto-approve"
-                        } else if (params.Terraform_Action == 'destroy') {
-                            sh "terraform -chdir=eks/ destroy -var-file=${params.Environment}.tfvars -auto-approve"
-                        } else {
-                            error "Invalid value for Terraform_Action: ${params.Terraform_Action}"
+                        def tfCmd = "terraform -chdir=eks/ ${params.Terraform_Action} -var-file=${params.Environment}.tfvars"
+                        if (params.Terraform_Action == 'apply' || params.Terraform_Action == 'destroy') {
+                            tfCmd += " -auto-approve"
                         }
+                        sh """
+                            export PATH=${TERRAFORM_DIR}:$PATH
+                            ${tfCmd}
+                        """
                     }
                 }
             }
         }
     }
 }
-
